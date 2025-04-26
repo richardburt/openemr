@@ -9,6 +9,7 @@
  * @author    Brady Miller <brady.g.miller@gmail.com>
  * @copyright Copyright (c) 2018-2020 Jerry Padgett <sjpadgett@gmail.com>
  * @copyright Copyright (c) 2019 Brady Miller <brady.g.miller@gmail.com>
+ * @copyright Copyright (c) 2024 Care Management Solutions, Inc. <stephen.waite@cmsvt.com>
  * @license   https://github.com/openemr/openemr/blob/master/LICENSE GNU General Public License 3
  */
 
@@ -201,19 +202,30 @@ class RestConfig
         $logger = new SystemLogger();
         $response = self::createServerResponse();
         $request = self::createServerRequest();
-        $server = new ResourceServer(
-            new AccessTokenRepository(),
-            self::$publicKey
-        );
         try {
+            // if we there's a key problem need to catch the exception
+            $server = new ResourceServer(
+                new AccessTokenRepository(),
+                self::$publicKey
+            );
             $raw = $server->validateAuthenticatedRequest($request);
         } catch (OAuthServerException $exception) {
             $logger->error("RestConfig->verifyAccessToken() OAuthServerException", ["message" => $exception->getMessage()]);
             return $exception->generateHttpResponse($response);
         } catch (\Exception $exception) {
-            $logger->error("RestConfig->verifyAccessToken() Exception", ["message" => $exception->getMessage()]);
-            return (new OAuthServerException($exception->getMessage(), 0, 'unknown_error', 500))
-                ->generateHttpResponse($response);
+            if ($exception instanceof LogicException) {
+                $logger->error(
+                    "RestConfig->verifyAccessToken() LogicException, likely oauth2 public key is missing, corrupted, or misconfigured",
+                    ["message" => $exception->getMessage()]
+                );
+                return (new OAuthServerException("Invalid access token", 0, 'invalid_token', 401))
+                    ->generateHttpResponse($response);
+            } else {
+                $logger->error("RestConfig->verifyAccessToken() Exception", ["message" => $exception->getMessage()]);
+                // do NOT reveal what happened at the server level if we have a server exception
+                return (new OAuthServerException("Server Error", 0, 'unknown_error', 500))
+                    ->generateHttpResponse($response);
+            }
         }
 
         return $raw;
@@ -299,9 +311,9 @@ class RestConfig
         return null;
     }
 
-    public static function authorization_check($section, $value, $user = ''): void
+    public static function authorization_check($section, $value, $user = '', $aclPermission = ''): void
     {
-        $result = AclMain::aclCheckCore($section, $value, $user);
+        $result = AclMain::aclCheckCore($section, $value, $user, $aclPermission);
         if (!$result) {
             if (!self::$notRestCall) {
                 http_response_code(401);

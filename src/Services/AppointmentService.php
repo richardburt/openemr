@@ -33,6 +33,8 @@ class AppointmentService extends BaseService
     const PRACTITIONER_TABLE = "users";
     const FACILITY_TABLE = "facility";
 
+    const CATEGORY_CONSTANT_NO_SHOW = 'no_show';
+
     /**
      * @var EncounterService
      */
@@ -81,7 +83,7 @@ class AppointmentService extends BaseService
 
     public function getUuidFields(): array
     {
-        return ['puuid', 'pce_aid_uuid', 'pc_uuid'];
+        return ['puuid', 'pce_aid_uuid', 'pc_uuid', 'facility_uuid', 'billing_location_uuid' ];
     }
 
     public function validate($appointment)
@@ -132,13 +134,17 @@ class AppointmentService extends BaseService
                        pce.pc_eventDate,
                        pce.pc_startTime,
                        pce.pc_endTime,
+                       pce.pc_time,
               	       pce.pc_facility,
                        pce.pc_billing_location,
                        pce.pc_catid,
                        pce.pc_pid,
                        pce.pc_duration,
+                       pce.pc_title,
                        f1.name as facility_name,
-                       f2.name as billing_location_name
+                       f1_map.uuid as facility_uuid,
+                       f2.name as billing_location_name,
+                       f2_map.uuid as billing_location_uuid
                        FROM (
                              SELECT
                                pc_eid,
@@ -149,15 +155,19 @@ class AppointmentService extends BaseService
                                pc_startTime,
                                pc_duration,
                                pc_endTime,
+                               pc_time,
                                pc_facility,
                                pc_billing_location,
                                pc_catid,
-                               pc_pid
+                               pc_pid,
+                               pc_title
                             FROM
                                  openemr_postcalendar_events
                        ) pce
                        LEFT JOIN facility as f1 ON pce.pc_facility = f1.id
+                       LEFT JOIN uuid_mapping as f1_map ON f1_map.target_uuid=f1.uuid AND f1_map.resource='Location'
                        LEFT JOIN facility as f2 ON pce.pc_billing_location = f2.id
+                       LEFT JOIN uuid_mapping as f2_map ON f2_map.target_uuid=f2.uuid AND f2_map.resource='Location'
                        LEFT JOIN (
                            select uuid AS puuid
                            ,fname
@@ -173,7 +183,7 @@ class AppointmentService extends BaseService
 
         $sql .= $whereClause->getFragment();
         $sqlBindArray = $whereClause->getBoundValues();
-        $statementResults =  QueryUtils::sqlStatementThrowException($sql, $sqlBindArray);
+        $statementResults = QueryUtils::sqlStatementThrowException($sql, $sqlBindArray);
 
         $processingResult = new ProcessingResult();
         while ($row = sqlFetchArray($statementResults)) {
@@ -201,15 +211,21 @@ class AppointmentService extends BaseService
                        pce.pc_eventDate,
                        pce.pc_startTime,
                        pce.pc_endTime,
+                       pce.pc_time,
               	       pce.pc_facility,
                        pce.pc_billing_location,
                        pce.pc_catid,
                        pce.pc_pid,
+                       pce.pc_title,
                        f1.name as facility_name,
-                       f2.name as billing_location_name
+                       f1_map.uuid as facility_uuid,
+                       f2.name as billing_location_name,
+                       f2_map.uuid as billing_location_uuid
                        FROM openemr_postcalendar_events as pce
                        LEFT JOIN facility as f1 ON pce.pc_facility = f1.id
+                       LEFT JOIN uuid_mapping as f1_map ON f1_map.target_uuid=f1.uuid AND f1_map.resource='Location'
                        LEFT JOIN facility as f2 ON pce.pc_billing_location = f2.id
+                       LEFT JOIN uuid_mapping as f2_map ON f2_map.target_uuid=f2.uuid AND f2_map.resource='Location'
                        LEFT JOIN patient_data as pd ON pd.pid = pce.pc_pid
                        LEFT JOIN users as providers ON pce.pc_aid = providers.id";
 
@@ -244,6 +260,7 @@ class AppointmentService extends BaseService
                        pce.pc_eventDate,
                        pce.pc_startTime,
                        pce.pc_endTime,
+                       pce.pc_time,
                        pce.pc_duration,
               	       pce.pc_facility,
                        pce.pc_billing_location,
@@ -251,11 +268,16 @@ class AppointmentService extends BaseService
                        pce.pc_room,
                        pce.pc_pid,
                        pce.pc_hometext,
+                       pce.pc_title,
                        f1.name as facility_name,
-                       f2.name as billing_location_name
+                       f1_map.uuid as facility_uuid,
+                       f2.name as billing_location_name,
+                       f2_map.uuid as billing_location_uuid
                        FROM openemr_postcalendar_events as pce
                        LEFT JOIN facility as f1 ON pce.pc_facility = f1.id
+                       LEFT JOIN uuid_mapping as f1_map ON f1_map.target_uuid=f1.uuid AND f1_map.resource='Location'
                        LEFT JOIN facility as f2 ON pce.pc_billing_location = f2.id
+                       LEFT JOIN uuid_mapping as f2_map ON f2_map.target_uuid=f2.uuid AND f2_map.resource='Location'
                        LEFT JOIN patient_data as pd ON pd.pid = pce.pc_pid
                        LEFT JOIN users as providers ON pce.pc_aid = providers.id
                        WHERE pce.pc_eid = ?";
@@ -272,9 +294,14 @@ class AppointmentService extends BaseService
 
     public function insert($pid, $data)
     {
-        $startTime = date("H:i:s", strtotime($data['pc_startTime']));
-        // TODO: Why are we adding strings with numbers?  How is this even working
-        $endTime = $startTime . $data['pc_duration'];
+        $startUnixTime = strtotime($data['pc_startTime']);
+        $startTime = date('H:i:s', $startUnixTime);
+
+        // DateInterval _needs_ a valid constructor, so set it to 0s then update.
+        $endTimeInterval = new \DateInterval('PT0S');
+        $endTimeInterval->s = $data['pc_duration'];
+
+        $endTime = (new \DateTime())->setTimestamp($startUnixTime)->add($endTimeInterval);
         $uuid = (new UuidRegistry())->createUuid();
 
         $sql  = " INSERT INTO openemr_postcalendar_events SET";
@@ -307,7 +334,7 @@ class AppointmentService extends BaseService
                 $data["pc_eventDate"],
                 $data['pc_apptstatus'],
                 $startTime,
-                $endTime,
+                $endTime->format('H:i:s'),
                 $data["pc_facility"],
                 $data["pc_billing_location"],
                 $data["pc_aid"] ?? null
@@ -377,7 +404,7 @@ class AppointmentService extends BaseService
                         // update the provider's original event
                         sqlStatement("UPDATE openemr_postcalendar_events SET " .
                             " pc_enddate = ? " .
-                            " WHERE " . $whereClause, array($selected_date), $whereBind);
+                            " WHERE " . $whereClause, array($selected_date, $whereBind));
                     } else { // In case of a change in the event head
                         // as we need to notify events that we are deleting this record we need to grab all of the pc_eid
                         // so we can process the events
@@ -448,7 +475,7 @@ class AppointmentService extends BaseService
      */
     public function getCalendarCategories()
     {
-        $sql = "SELECT pc_catid, pc_constant_id, pc_catname, pc_cattype,aco_spec FROM openemr_postcalendar_categories "
+        $sql = "SELECT pc_catid, pc_constant_id, pc_catname, pc_cattype,aco_spec, pc_last_updated FROM openemr_postcalendar_categories "
         . " WHERE pc_active = 1 ORDER BY pc_seq";
         return QueryUtils::fetchRecords($sql);
     }
@@ -458,7 +485,7 @@ class AppointmentService extends BaseService
      * @param $option
      * @return bool
      */
-    public function isCheckInStatus($option)
+    public static function isCheckInStatus($option)
     {
         $row = sqlQuery("SELECT toggle_setting_1 FROM list_options WHERE " .
             "list_id = 'apptstat' AND option_id = ? AND activity = 1", array($option));
@@ -474,7 +501,7 @@ class AppointmentService extends BaseService
      * @param $option
      * @return bool
      */
-    public function isCheckOutStatus($option)
+    public static function isCheckOutStatus($option)
     {
         $row = sqlQuery("SELECT toggle_setting_2 FROM list_options WHERE " .
             "list_id = 'apptstat' AND option_id = ? AND activity = 1", array($option));
@@ -591,6 +618,10 @@ class AppointmentService extends BaseService
             [$appointment['pc_facility']]
         );
 
+        $visit_reason = $appointment['pc_hometext'] ?? xl('Please indicate visit reason');
+        if (!empty($GLOBALS['auto_create_prevent_reason'] ?? 0)) {
+            $visit_reason = 'Please indicate visit reason';
+        }
         $data = [
             'pc_catid' => $appointment['pc_catid']
             // TODO: where would we get this information if it wasn't defaulted to ambulatory?  Should this be a globals setting?
@@ -599,7 +630,7 @@ class AppointmentService extends BaseService
             ,'puuid' => $patientUuid
             ,'pid' => $appointment['pid']
             ,'provider_id' => $user['id']
-            ,'reason' => $appointment['pc_hometext'] ?? xl('Please indicate visit reason')
+            ,'reason' => $visit_reason
             ,'facility_id' => $appointment['pc_facility']
             ,'billing_facility' => $appointment['pc_billing_location']
             ,'pos_code' => $pos_code
@@ -624,5 +655,20 @@ class AppointmentService extends BaseService
     {
         $sql = "SELECT * FROM openemr_postcalendar_categories WHERE pc_catid = ?";
         return QueryUtils::fetchRecords($sql, [$cat_id]);
+    }
+
+    public function searchCalendarCategories(array $oeSearchParameters)
+    {
+        $sql = "SELECT * FROM openemr_postcalendar_categories ";
+        $whereClause = FhirSearchWhereClauseBuilder::build($oeSearchParameters, true);
+        $sql .= $whereClause->getFragment();
+        $sqlBindArray = $whereClause->getBoundValues();
+        $records = QueryUtils::fetchRecords($sql, $sqlBindArray);
+        $processingResult = new ProcessingResult();
+        if (!empty($records)) {
+            $processingResult->setData($records);
+        }
+        // TODO: look at handling offset and limit here
+        return $processingResult;
     }
 }

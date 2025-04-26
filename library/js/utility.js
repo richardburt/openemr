@@ -12,9 +12,10 @@
 /* We should really try to keep this library jQuery free ie javaScript only! */
 
 // Translation function
-// This calls the i18next.t function that has been set up in main.php
+// This calls the i18next.t function that has been set up in main.php, portal/base.html.twig, etc.
 function xl(string) {
-    if (typeof top.i18next.t == 'function') {
+    // safety check if for some reason the i18next is not included.
+    if (top.i18next && typeof top.i18next.t == 'function') {
         return top.i18next.t(string);
     } else {
         // Unable to find the i18next.t function, so log error
@@ -51,6 +52,12 @@ if (typeof htmlEscapesText === 'undefined') {
         return ('' + string).replace(htmlEscaperAttr, function (match) {
             return htmlEscapesAttr[match];
         });
+    };
+    jsXla = function (string) {
+        return jsAttr(xl(string));
+    };
+    jsXlt = function (string) {
+        return jsText(xl(string));
     };
 }
 
@@ -345,7 +352,47 @@ function oeSortable(callBackFn) {
     }
 }
 
+// Password Strength Meter JavaScript
+function checkPasswordStrength(inputElement) {
+    var number = /[\p{N}]/u;  // Matches any Unicode number character
+    var alphabets = /[\p{L}]/u;  // Matches any Unicode letter character
+    var special_characters = /[^\p{N}\p{L}]/u; // Matches any character that is not a letter, number, or whitespace
 
+    var pwd = inputElement.value;
+    var strength = 0;
+
+    if (pwd.length < 6) {
+        document.getElementById('password_strength_meter').style.backgroundColor = "#ff6666";
+        document.getElementById('password_strength_text').innerText = xl('Very Weak');
+    } else {
+        if (pwd.match(number) && pwd.match(alphabets) && pwd.match(special_characters)) {
+            strength += 3;
+        } else if (pwd.match(number) && pwd.match(alphabets)) {
+            strength += 2;
+        } else if (pwd.match(alphabets)) {
+            strength += 1;
+        }
+
+        switch (strength) {
+            case 1:
+                document.getElementById('password_strength_meter').style.backgroundColor = "#ffcc00";
+                document.getElementById('password_strength_text').innerText = xl('Weak');
+                break;
+            case 2:
+                document.getElementById('password_strength_meter').style.backgroundColor = "#ffcc66";
+                document.getElementById('password_strength_text').innerText = xl('Good');
+                break;
+            case 3:
+                document.getElementById('password_strength_meter').style.backgroundColor = "#99cc00";
+                document.getElementById('password_strength_text').innerText = xl('Strong');
+                break;
+            default:
+                document.getElementById('password_strength_meter').style.backgroundColor = "#ff6666";
+                document.getElementById('password_strength_text').innerText = xl('Very Weak');
+                break;
+        }
+    }
+}
 /*
 * Universal async BS alert message with promise
 * Note the use of new javaScript translate function xl().
@@ -499,7 +546,65 @@ if (typeof top.userDebug !== 'undefined' && (top.userDebug === '1' || top.userDe
                     dlgopen(url, '_blank', 'modal-full', height, '', title, {allowExternal: true});
                 });
         }
+
+        let dsiHelpNodes = document.querySelectorAll(".smart-launch-dsi-info");
+        for (let dsiHelp of dsiHelpNodes) {
+            dsiHelp.addEventListener('click', function (evt) {
+                let node = evt.target;
+                let dsi = node.dataset.dsiServiceId || "";
+                if (typeof dsi != "string" || dsi == "") {
+                    console.error("mising data-dsi-service-id parameter for .smart-launch-dsi-info");
+                    return;
+                }
+
+
+                // need to add a window message listener for editing the source attributes
+                let windowMessageHandler = function () {
+                    console.log("received message ", event);
+                    if (event.origin !== window.location.origin) {
+                        return;
+                    }
+                    let data = event.data;
+                    if (data && data.type === 'smart-dsi-edit-source') {
+                        window.name = event.source.name;
+                        dlgclose();
+                        window.top.removeEventListener('message', windowMessageHandler);
+                        // loadFrame already handles webroot and /interface/ prefix.
+                        let editUrl = '/smart/admin-client.php?action=' + encodeURIComponent("external-cdr/edit/" + data.dsiId)
+                            + "&csrf_token=" + encodeURIComponent(csrfToken);
+                        window.parent.left_nav.loadFrame('adm', 'adm0', editUrl);
+                    }
+                };
+                window.top.addEventListener('message', windowMessageHandler);
+
+                let url = webroot + '/interface/smart/admin-client.php?action=' + encodeURIComponent("external-cdr/cdr-info")
+                    + '&serviceId=' + encodeURIComponent(dsi)
+                    + "&csrf_token=" + encodeURIComponent(csrfToken);
+                let title = node.dataset.smartName || JSON.stringify(xl("Smart App"));
+                // we allow external dialog's  here because that is what a SMART app is
+                let height = window.top.innerHeight; // do our full height here
+                dlgopen(url, 'smartDsiEditSource', 'modal-full', height, '', title, {allowExternal: false, onClose: function() {
+                    window.top.removeEventListener('message', windowMessageHandler);
+                }});
+            });
+        }
     };
     window.oeSMART = oeSMART;
 })(window, window.top.oeSMART || {});
 
+/*
+* @function isValidEmail(emailAddress)
+* @summary call this function where you need to validate an email address
+*  is formatted correctly, function will return bool true/false
+*
+* @param string An email address to validate, e.g. e.g. first.last@gmail.com
+*/
+function isValidEmail(emailAddress) {
+    // RegEx from https://owasp.org/www-community/OWASP_Validation_Regex_Repository
+    var mailformat = /^[a-zA-Z0-9_+&*-]+(?:\.[a-zA-Z0-9_+&*-]+)*@(?:[a-zA-Z0-9-]+\.)+[a-zA-Z]{2,}$/;
+    if (emailAddress.match(mailformat)) {
+        return true;
+    } else {
+        return false;
+    }
+}

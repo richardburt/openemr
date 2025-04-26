@@ -43,7 +43,7 @@ function addForm(
     }
 
     //print_r($_SESSION['therapy_group']);die;
-        $arraySqlBind = array();
+    $arraySqlBind = array();
     $sql = "insert into forms (date, encounter, form_name, form_id, pid, " .
         "user, groupname, authorized, formdir, therapy_group_id) values (";
     if ($date == "NOW()") {
@@ -160,5 +160,5 @@ function hasFormPermission($formDir)
     // get the aco spec from registry table
     $formRow = sqlQuery("SELECT aco_spec FROM registry WHERE directory = ?", array($formDir));
     $permission = explode('|', ($formRow['aco_spec'] ?? ''));
-    return AclMain::aclCheckCore($permission[0], $permission[1]);
+    return AclMain::aclCheckCore($permission[0], $permission[1] ?? null);
 }

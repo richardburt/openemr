@@ -423,6 +423,7 @@ class ScopeRepository implements ScopeRepositoryInterface
             "user/RelatedPerson.write",
             "user/Schedule.read",
             "user/ServiceRequest.read",
+            "user/ValueSet.read",
         ];
 
         if ($this->restConfig->areSystemScopesEnabled()) {
@@ -482,6 +483,7 @@ class ScopeRepository implements ScopeRepositoryInterface
 //            "system/RelatedPerson.write",
             "system/Schedule.read",
             "system/ServiceRequest.read",
+            "system/ValueSet.read",
         ];
     }
 
@@ -497,6 +499,7 @@ class ScopeRepository implements ScopeRepositoryInterface
             "patient/document.read",
             "patient/document.write",
             "patient/drug.read",
+            "patient/employer.read",
             "patient/encounter.read",
             "patient/encounter.write",
             "patient/facility.read",
@@ -535,6 +538,7 @@ class ScopeRepository implements ScopeRepositoryInterface
             "system/document.read",
             "system/document.write",
             "system/drug.read",
+            "system/employer.read",
             "system/encounter.read",
             "system/encounter.write",
             "system/facility.read",
@@ -573,6 +577,7 @@ class ScopeRepository implements ScopeRepositoryInterface
             "user/document.read",
             "user/document.write",
             "user/drug.read",
+            "user/employer.read",
             "user/encounter.read",
             "user/encounter.write",
             "user/facility.read",
@@ -1005,6 +1010,9 @@ class ScopeRepository implements ScopeRepositoryInterface
                 break;
             case 'Provenance':
                 $description .= xl("provenance information (including person(s) responsible for the information, author organizations, and transmitter organizations)");
+                break;
+            case 'ValueSet':
+                $description .= xl("value set records");
                 break;
             default:
                 $description .= xl("medical records for this resource type");

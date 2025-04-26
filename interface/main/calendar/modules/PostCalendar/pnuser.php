@@ -122,7 +122,7 @@ function postcalendar_user_display($args)
 function postcalendar_user_search()
 {
     $tpl = new pcSmarty();
-    $k = isset($_REQUEST['pc_keywords']) ? pnVarCleanFromInput($_REQUEST['pc_keywords']) : '';
+    $k = pnVarCleanFromInput('pc_keywords') ?? '';
     $k_andor = pnVarCleanFromInput('pc_keywords_andor');
     $pc_category = pnVarCleanFromInput('pc_category');
     $pc_facility = pnVarCleanFromInput('pc_facility');
@@ -368,7 +368,7 @@ function postcalendar_user_search()
         // build our search query
         foreach ($keywords as $word) {
             if (!empty($sqlKeywords)) {
-                $sqlKeywords .= " $k_andor ";
+                $sqlKeywords .= " " . escape_identifier($k_andor, ['AND', 'OR'], true) . " ";
             }
 
             $sqlKeywords .= '(';

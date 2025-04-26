@@ -2,6 +2,8 @@
 
 /**
  * Encounter list.
+ *  rm: print button to print page & generate pdf; include patients name, id and dob on the page. issue #7270
+ *
  *
  * @package   OpenEMR
  * @link      http://www.open-emr.org
@@ -27,10 +29,17 @@ use OpenEMR\Common\Acl\AclMain;
 use OpenEMR\Billing\BillingUtilities;
 use OpenEMR\Billing\InvoiceSummary;
 use OpenEMR\Common\Csrf\CsrfUtils;
+use OpenEMR\Common\Forms\FormLocator;
+use OpenEMR\Common\Forms\FormReportRenderer;
+use OpenEMR\Common\Logging\SystemLogger;
+use OpenEMR\Common\Session\PatientSessionUtil;
 use OpenEMR\Core\Header;
 
 $is_group = ($attendant_type == 'gid') ? true : false;
 
+if (isset($_GET['pid']) && $_GET['pid'] != $_SESSION['pid']) {
+    PatientSessionUtil::setPid($_GET['pid']);
+}
 // "issue" parameter exists if we are being invoked by clicking an issue title
 // in the left_nav menu.  Currently that is just for athletic teams.  In this
 // case we only display encounters that are linked to the specified issue.
@@ -67,6 +76,12 @@ if (isset($_GET['billing'])) {
 } else {
     $billing_view = ($default_encounter == 0) ? 0 : 1;
 }
+
+// form locator will cache form locations (so modules can extend)
+// form report renderer will render the form reports
+$logger = new SystemLogger();
+$formLocator = new FormLocator($logger);
+$formReportRenderer = new FormReportRenderer($formLocator, $logger);
 
 //Get Document List by Encounter ID
 function getDocListByEncID($encounter, $raw_encounter_date, $pid)
@@ -180,6 +195,12 @@ function generatePageElement($start, $pagesize, $billing, $issue, $text)
 <script src="<?php echo $GLOBALS['webroot'] ?>/library/js/ajtooltip.js"></script>
 
 <script>
+
+$(function () {
+   // print the history - as displayed
+    top.printLogSetup(document.getElementById('printbutton'));
+});
+
 // open dialog to edit an invoice w/o opening encounter.
 function editInvoice(e, id) {
     e.stopPropagation();
@@ -272,6 +293,8 @@ window.onload = function() {
     <?php } else { ?>
         <a href='encounters.php?billing=1&issue=<?php echo $issue . $getStringForPage; ?>' class="btn btn-small btn-info" onclick='top.restoreSession()' style='font-size: 11px'><?php echo xlt('To Billing View'); ?></a>
     <?php } ?>
+    &nbsp; &nbsp;
+     <a  href='#' id='printbutton' class='btn btn-secondary btn-print'>  <?php echo xlt('Print page'); ?>   </a>
 
     <span class="float-right">
         <?php echo xlt('Results per page'); ?>:
@@ -297,6 +320,17 @@ window.onload = function() {
     </span>
 
     <br />
+    <span class="heading" >
+    <?php
+    if ($attendant_type == 'pid') {
+  // RM put patienes name, id and dob at top of the history -->
+        $name =  getPatientNameFirstLast($pid);
+        $dob =  text(oeFormatShortDate(getPatientData($pid, "DOB")['DOB']));
+         $external_id = getPatientData($pid, "pubpid")['pubpid'];
+        echo text($name) . " (" . text($external_id) . ")" .  "&nbsp;  &nbsp; DOB: " . $dob ;
+    }
+    ?>
+    </span>
 
     <div class="table-responsive">
         <table class="table table-hover jumbotron py-4 mt-3">
@@ -368,7 +402,7 @@ window.onload = function() {
                 $drow = sqlFetchArray($dres);
             }
 
-            // $count = 0;
+            $numRes = 0;
 
             $sqlBindArray = array();
             if ($attendant_type == 'pid') {
@@ -401,7 +435,7 @@ window.onload = function() {
 
             $countRes = sqlStatement($countQuery, $sqlBindArray);
             $count = sqlFetchArray($countRes);
-            $numRes = $count['c'];
+            $numRes += $count['c'];
 
 
             if ($pagesize > 0) {
@@ -416,7 +450,8 @@ window.onload = function() {
             if (($pagesize > 0) && ($pagestart > 0)) {
                 generatePageElement($pagestart - $pagesize, $pagesize, $billing_view, $issue, "&lArr;" . htmlspecialchars(xl("Prev"), ENT_NOQUOTES) . " ");
             }
-            echo ($pagestart + 1) . "-" . $upper . " " . htmlspecialchars(xl('of'), ENT_NOQUOTES) . " " . $numRes;
+            echo (($pagesize > 0) ? ($pagestart + 1) : "1") . "-" . $upper . " " . htmlspecialchars(xl('of'), ENT_NOQUOTES) . " " . $numRes;
+
             if (($pagesize > 0) && ($pagestart + $pagesize <= $numRes)) {
                 generatePageElement($pagestart + $pagesize, $pagesize, $billing_view, $issue, " " . htmlspecialchars(xl("Next"), ENT_NOQUOTES) . "&rArr;");
             }
@@ -460,7 +495,7 @@ window.onload = function() {
 
                     // This generates document lines as appropriate for the date order.
                 while ($drow && $raw_encounter_date && $drow['docdate'] > $raw_encounter_date) {
-                    showDocument($drow);
+                         showDocument($drow);
                     $drow = sqlFetchArray($dres);
                 }
 
@@ -561,18 +596,19 @@ window.onload = function() {
                         //
                         $formdir = $enc['formdir'];
                         if ($issue) {
+                            // note per comments this is only used for athletic teams..
                             echo text(xl_form_title($enc['form_name']));
                             echo "<br />";
                             echo "<div class='encreport pl-2'>";
-                    // Use the form's report.php for display.  Forms with names starting with LBF
-                    // are list-based forms sharing a single collection of code.
-                            if (substr($formdir, 0, 3) == 'LBF') {
-                                include_once($GLOBALS['incdir'] . "/forms/LBF/report.php");
-                                lbf_report($pid, $result4['encounter'], 2, $enc['form_id'], $formdir);
-                            } else {
-                                include_once($GLOBALS['incdir'] . "/forms/$formdir/report.php");
-                                call_user_func($formdir . "_report", $pid, $result4['encounter'], 2, $enc['form_id']);
-                            }
+                            // render out the form, whether its LBF or a standard file.
+                            $formReportRenderer->renderReport(
+                                $formdir,
+                                "encounters.php",
+                                $pid,
+                                $result4['encounter'],
+                                2,
+                                $enc['form_id']
+                            );
                             echo "</div>";
                         } else {
                             $formDiv = "<div ";
@@ -813,7 +849,7 @@ window.onload = function() {
             } // end while
 
             // Dump remaining document lines if count not exceeded.
-            while ($drow /* && $count <= $N */) {
+            while ($drow) {
                 showDocument($drow);
                 $drow = sqlFetchArray($dres);
             }

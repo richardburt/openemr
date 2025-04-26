@@ -30,6 +30,7 @@ require_once($GLOBALS['fileroot'] . "/controllers/C_Document.class.php");
 use ESign\Api;
 use Mpdf\Mpdf;
 use OpenEMR\Common\Acl\AclMain;
+use OpenEMR\Common\Forms\FormReportRenderer;
 use OpenEMR\Common\Twig\TwigContainer;
 use OpenEMR\Core\Header;
 use OpenEMR\MedicalDevice\MedicalDevice;
@@ -57,6 +58,11 @@ if ($PDF_FAX) {
 
 if ($PDF_OUTPUT) {
     $config_mpdf = Config_Mpdf::getConfigMpdf();
+    // special settings for patient custom report that are necessary for mpdf
+    $config_mpdf['margin_top'] = $config_mpdf['margin_top'] * 1.5;
+    $config_mpdf['margin_bottom'] = $config_mpdf['margin_bottom'] * 1.5;
+    $config_mpdf['margin_header'] = $GLOBALS['pdf_top_margin'];
+    $config_mpdf['margin_footer'] =  $GLOBALS['pdf_bottom_margin'];
     $pdf = new mPDF($config_mpdf);
     if ($_SESSION['language_direction'] == 'rtl') {
         $pdf->SetDirectionality('rtl');
@@ -321,16 +327,13 @@ function zip_content($source, $destination, $content = '', $create = true)
 
             <?php
 
+            $reportRenderer = new FormReportRenderer();
+
             // include ALL form's report.php files
             $inclookupres = sqlStatement("select distinct formdir from forms where pid = ? AND deleted=0", array($pid));
             while ($result = sqlFetchArray($inclookupres)) {
                 // include_once("{$GLOBALS['incdir']}/forms/" . $result["formdir"] . "/report.php");
                 $formdir = $result['formdir'];
-                if (substr($formdir, 0, 3) == 'LBF') {
-                    include_once($GLOBALS['incdir'] . "/forms/LBF/report.php");
-                } else {
-                    include_once($GLOBALS['incdir'] . "/forms/$formdir/report.php");
-                }
             }
 
             if ($PDF_OUTPUT) {
@@ -576,6 +579,7 @@ function zip_content($source, $destination, $content = '', $create = true)
                             // adding support for .txt MDM-TXA interface/orders/receive_hl7_results.inc.php
                             if ($extension != (".pdf" || ".txt")) {
                                 $tempCDoc = new C_Document();
+                                $tempCDoc->onReturnRetrieveKey();
                                 $tempFile = $tempCDoc->retrieve_action($d->get_foreign_id(), $document_id, false, true, true, true);
                                 // tmp file in temporary_files_dir
                                 $tempFileName = tempnam($GLOBALS['temporary_files_dir'], "oer");
@@ -590,6 +594,7 @@ function zip_content($source, $destination, $content = '', $create = true)
                                     // OK to link to the image file because it will be accessed by the
                                     // mPDF parser and not the browser.
                                     $tempDocC = new C_Document();
+                                    $tempDocC->onReturnRetrieveKey();
                                     $fileTemp = $tempDocC->retrieve_action($d->get_foreign_id(), $document_id, false, true, true, true);
                                     // tmp file in ../documents/temp since need to be available via webroot
                                     $from_file_tmp_web_name = tempnam($GLOBALS['OE_SITE_DIR'] . '/documents/temp', "oer");
@@ -619,6 +624,7 @@ function zip_content($source, $destination, $content = '', $create = true)
                                         // below header isn't being used. missed maybe!
                                         $pg_header = "<span>" . xlt('Document') . " " . text($fname) . "-" . text($d->get_id()) . "</span>";
                                         $tempDocC = new C_Document();
+                                        $tempDocC->onReturnRetrieveKey();
                                         $pdfTemp = $tempDocC->retrieve_action($d->get_foreign_id(), $document_id, false, true, true, true);
                                         // tmp file in temporary_files_dir
                                         $from_file_tmp_name = tempnam($GLOBALS['temporary_files_dir'], "oer");
@@ -654,6 +660,7 @@ function zip_content($source, $destination, $content = '', $create = true)
                                 } elseif ($extension == ".txt") {
                                     echo "<pre>";
                                     $tempDocC = new C_Document();
+                                    $tempDocC->onReturnRetrieveKey();
                                     $textTemp = $tempDocC->retrieve_action($d->get_foreign_id(), $document_id, false, true, true, true);
                                     echo text($textTemp);
                                     echo "</pre>";
@@ -661,6 +668,7 @@ function zip_content($source, $destination, $content = '', $create = true)
                                     if ($PDF_OUTPUT) {
                                         // OK to link to the image file because it will be accessed by the mPDF parser and not the browser.
                                         $tempDocC = new C_Document();
+                                        $tempDocC->onReturnRetrieveKey();
                                         $fileTemp = $tempDocC->retrieve_action($d->get_foreign_id(), $document_id, false, false, true, true);
                                         // tmp file in ../documents/temp since need to be available via webroot
                                         $from_file_tmp_web_name = tempnam($GLOBALS['OE_SITE_DIR'] . '/documents/temp', "oer");
@@ -777,9 +785,10 @@ function zip_content($source, $destination, $content = '', $create = true)
                                 echo "<div class='text encounter_form'>";
                                 echo "<h4>" . text(xl_form_title($formres["form_name"])) . "</h4>";
                             }
-
+                            if (!empty($dateres['date'])) {
                             // show the encounter's date
-                            echo "(" . text(oeFormatSDFT(strtotime($dateres["date"]))) . ") ";
+                                echo "(" . text(oeFormatSDFT(strtotime($dateres["date"]))) . ") ";
+                            }
                             if ($res[1] == 'newpatient') {
                                 // display the provider info
                                 echo ' ' . xlt('Provider') . ': ' . text(getProviderName(getProviderIdOfEncounter($form_encounter)));
@@ -794,17 +803,9 @@ function zip_content($source, $destination, $content = '', $create = true)
                                 if (!empty($res[1])) {
                                     $esign = $esignApi->createFormESign($formId, $res[1], $form_encounter);
                                     if ($esign->isSigned('report') && !empty($GLOBALS['esign_report_show_only_signed'])) {
-                                        if (substr($res[1], 0, 3) == 'LBF') {
-                                            call_user_func("lbf_report", $pid, $form_encounter, $N, $form_id, $res[1]);
-                                        } else {
-                                            call_user_func($res[1] . "_report", $pid, $form_encounter, $N, $form_id);
-                                        }
+                                        $reportRenderer->renderReport($res[1], 'custom_report.php', $pid, $form_encounter, $N, $form_id, $res[1]);
                                     } elseif (empty($GLOBALS['esign_report_show_only_signed'])) {
-                                        if (substr($res[1], 0, 3) == 'LBF') {
-                                            call_user_func('lbf_report', $pid, $form_encounter, $N, $form_id, $res[1]);
-                                        } else {
-                                            call_user_func($res[1] . '_report', $pid, $form_encounter, $N, $form_id);
-                                        }
+                                        $reportRenderer->renderReport($res[1], 'custom_report.php', $pid, $form_encounter, $N, $form_id, $res[1]);
                                     } else {
                                         echo "<h6>" . xlt("Not signed.") . "</h6>";
                                     }

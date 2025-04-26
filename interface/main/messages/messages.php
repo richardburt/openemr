@@ -300,8 +300,12 @@ if (!empty($_REQUEST['go'])) { ?>
                             $datetime = isset($_POST['form_datetime']) ? DateTimeToYYYYMMDDHHMMSS($_POST['form_datetime']) : '';
                             foreach ($assigned_to_list as $assigned_to) {
                                 if ($noteid && $assigned_to != '-patient-') {
-                                    updatePnote($noteid, $note, $form_note_type, $assigned_to, $form_message_status, $datetime);
-                                    $noteid = '';
+                                    if (checkPnotesNoteId($noteid, $_SESSION['authUser'])) {
+                                        updatePnote($noteid, $note, $form_note_type, $assigned_to, $form_message_status, $datetime);
+                                        $noteid = '';
+                                    } else {
+                                        die("Message is not assigned to you. Adding is disallowed.");
+                                    }
                                 } else {
                                     if ($noteid && $assigned_to == '-patient-') {
                                         // When $assigned_to == '-patient-' we don't update the current note, but
@@ -391,7 +395,7 @@ if (!empty($_REQUEST['go'])) { ?>
                                 action=\"messages.php?showall=" . attr_url($showall) . "&sortby=" . attr_url($sortby) . "&sortorder=" . attr_url($sortorder) . "&begin=" . attr_url($begin) . "&$activity_string_html\"
                                 method='post'>
                                 <input type='hidden' name='noteid' id='noteid' value='" . attr($noteid) . "' />
-                                
+
                                 <input type='hidden' name='task' id='task' value='add' />";
                         if ($task == "addnew") {
                             $attach_id = $_REQUEST['attach'] ?? null;
@@ -478,7 +482,7 @@ if (!empty($_REQUEST['go'])) { ?>
                                             <?php } ?>
                                             <div class="col-6 col-sm-4 d-flex align-items-end flex-wrap">
                                                 <label for="assigned_to_text"><?php echo xlt('To{{Destination}}'); ?>:</label>
-                                                <input type='text' name='assigned_to_text' class='form-control oe-cursor-stop' id='assigned_to_text' readonly='readonly' value='' placeholder='<?php echo xla("SELECT Users FROM The Dropdown LIST"); ?>' />
+                                                <input type='text' name='assigned_to_text' class='form-control oe-cursor-stop' id='assigned_to_text' readonly='readonly' value='' placeholder='<?php echo xla("Select users from the dropdown list"); ?>' />
                                                 <input type='hidden' name='assigned_to' id='assigned_to' />
                                             </div>
                                             <div class="col-6 col-sm-4">
@@ -653,7 +657,7 @@ if (!empty($_REQUEST['go'])) { ?>
                             }
                             $count++;
                             echo "
-                                <tr id=\"row" . attr($count) . "\" height='24'>
+                                <tr id=\"row" . attr($count) . "\" height='24' class='messages-item-row' role='button'>
                                     <td align='center'>
                                         <input type='checkbox' id=\"check" . attr($count) . "\" name=\"delete_id[]\" value=\"" .
                                         attr($myrow['id']) . "\" onclick=\"if(this.checked==true){ selectRow('row" . attr(addslashes($count)) . "'); }else{ deselectRow('row" . attr(addslashes($count)) . "'); }\"></td>
@@ -661,7 +665,7 @@ if (!empty($_REQUEST['go'])) { ?>
                                         <div>" . text($name) . "</div>
                                     </td>
                                     <td>
-                                        <div><a href=\"messages.php?showall=" . attr_url($showall) . "&sortby=" . attr_url($sortby) . "&sortorder=" . attr_url($sortorder) . "&begin=" . attr_url($begin) . "&task=edit&noteid=" .
+                                        <div><a class=\"messages-item-link\" href=\"messages.php?showall=" . attr_url($showall) . "&sortby=" . attr_url($sortby) . "&sortorder=" . attr_url($sortorder) . "&begin=" . attr_url($begin) . "&task=edit&noteid=" .
                                         attr_url($myrow['id']) . "&$activity_string_html\" onclick=\"top.restoreSession()\">" .
                                         text($patient) . "</a></div>
                                     </td>
@@ -712,11 +716,11 @@ if (!empty($_REQUEST['go'])) { ?>
                                         }
                                     }
                                     if (int_checked > 0){
-                                        if (confirm("<?php echo xls('Do you really want to delete the selection?'); ?>")) {
+                                        if (confirm(<?php echo xlj('Do you really want to delete the selection?'); ?>)) {
                                             document.MessageList.submit();
                                         }
                                     } else {
-                                        alert("<?php echo xls('Please select message(s) to delete'); ?>");
+                                        alert(<?php echo xlj('Please select message(s) to delete'); ?>);
                                     }
                                 }
 
@@ -738,12 +742,33 @@ if (!empty($_REQUEST['go'])) { ?>
 
                             // The two functions below are for managing row styles in Messages table.
                             function selectRow(row) {
+                                event.stopPropagation();
                                 document.getElementById(row).style.background = "var(--gray200)";
                             }
-
                             function deselectRow(row) {
+                                event.stopPropagation();
                                 document.getElementById(row).style.background = "var(--light)";
                             }
+
+                            function makeMessageRowsClickable() {
+                                let items = document.querySelectorAll(".messages-item-row");
+                                items.forEach(function(item) {
+                                    item.addEventListener("click", function(event) {
+                                        if (event.currentTarget && event.currentTarget.querySelector) {
+                                            let link = event.currentTarget.querySelector(".messages-item-link");
+                                            if (link && link.href) {
+                                                window.top.restoreSession(); // make sure we sync up the session
+                                                // now let's go to the link.
+                                                window.location = link.href;
+                                            }
+                                        }
+                                    })
+                                })
+                            }
+
+                            document.addEventListener("DOMContentLoaded", function() {
+                                makeMessageRowsClickable();
+                            })
                         </script>
                         <?php
                     }
@@ -768,22 +793,17 @@ if (!empty($_REQUEST['go'])) { ?>
             </div><!--end of recalls div-->
             <?php } ?>
             <div class="row tab-pane" role="tabpanel" id="sms-div">
-                <div class="col-sm-12">
-                    <div class="jumbotron jumbotron-fluid p-2">
-                        <?php if ($logged_in) { ?>
-                        <div class="col-sm-4 col-md-4 col-lg-4">
-                            <span class="title"><?php echo xlt('SMS Zone'); ?></span>
-                            <br/><br/>
-                            <form id="smsForm" class="input-group">
-                                <select id="SMS_patient" type="text" class="form-control m-0 w-100" placeholder="<?php echo xla("Patient Name"); ?>" > </select>
-                                <span class="input-group-addon" onclick="SMS_direct();"><i class="fas fa-phone"></i></span>
-                                <input type="hidden" id="sms_pid" />
-                                <input type="hidden" id="sms_mobile" value="" />
-                                <input type="hidden" id="sms_allow" value="" />
-                            </form>
-                        </div>
-                        <?php } ?>
-                    </div>
+                <div class="col-sm-4 col-md-4 col-lg-4">
+                    <?php if ($logged_in) { ?>
+                    <h4><?php echo xlt('SMS Zone'); ?></h4>
+                    <form id="smsForm" class="input-group">
+                        <select id="SMS_patient" type="text" class="form-control m-0 w-100" placeholder="<?php echo xla("Patient Name"); ?>"></select>
+                        <span class="input-group-addon" onclick="SMS_direct();">&nbsp;&nbsp;<i id='open-sms-tooltip' class="fas fa-2x fa-phone"></i></span>
+                        <input type="hidden" id="sms_pid" />
+                        <input type="hidden" id="sms_mobile" value="" />
+                        <input type="hidden" id="sms_allow" value="" />
+                    </form>
+                    <?php } ?>
                 </div>
             </div><!--end of sms div-->
         </div>
@@ -849,6 +869,7 @@ if (!empty($_REQUEST['go'])) { ?>
         $(function () {
             $('#see-all-tooltip').attr({"title": <?php echo xlj('Click to show messages for all users'); ?>, "data-toggle":"tooltip", "data-placement":"bottom"}).tooltip();
             $('#just-mine-tooltip').attr({"title": <?php echo xlj('Click to show messages for only the current user'); ?>, "data-toggle":"tooltip", "data-placement":"bottom"}).tooltip();
+            $('#open-sms-tooltip').attr({"title": <?php echo xlj('Click to open SMS for patient'); ?>, "data-toggle":"tooltip", "data-placement":"bottom"}).tooltip();
         });
         $(function () {
             var f = $("#smsForm");
@@ -877,7 +898,10 @@ if (!empty($_REQUEST['go'])) { ?>
                         };
                     },
                     cache: true
-                }
+                },
+                dropdownAutoWidth: true,
+                placeholder: xl('Search for patient...'),
+                theme: 'bootstrap4'
             })
 
             $('#SMS_patient').on('select2:select', function (e) {
@@ -911,7 +935,7 @@ if (!empty($_REQUEST['go'])) { ?>
 
             //clear button in messages
             $("#clear_user").click(function(){
-                $("#assigned_to_text").val("<?php echo xls('Select Users From The Dropdown List'); ?>");
+                $("#assigned_to_text").val(<?php echo xlj('Select users from the dropdown list'); ?>);
                 $("#assigned_to").val("");
                 $("#users").val("--");
             });
@@ -927,7 +951,7 @@ if (!empty($_REQUEST['go'])) { ?>
             top.restoreSession();
             if(document.getElementById("form_message_status").value !== 'Done'){
                 collectvalidation.assigned_to = {
-                    presence: {message: "<?php echo xls('Recipient required unless status is Done'); ?>"}
+                    presence: {message: <?php echo xlj('Recipient required unless status is Done'); ?>}
                 }
             }
             else{
@@ -948,6 +972,7 @@ if (!empty($_REQUEST['go'])) { ?>
                 $("#new_note").submit();
             }
         };
+
         var PrintNote = function () {
             <?php if ($noteid) { ?>
             top.restoreSession();
@@ -1040,9 +1065,9 @@ if (!empty($_REQUEST['go'])) { ?>
             var m = $("#sms_mobile").val();
             var allow = $("#sms_allow").val();
             if ((pid === '') || (m === '')) {
-                alert('<?php echo xls("MedEx needs a valid mobile number to send SMS messages..."); ?>');
+                alert(<?php echo xlj("MedEx needs a valid mobile number to send SMS messages..."); ?>);
             } else if (allow === 'NO') {
-                alert('<?php echo xls("This patient does not allow SMS messaging!"); ?>');
+                alert(<?php echo xlj("This patient does not allow SMS messaging!"); ?>);
             } else {
                 top.restoreSession();
                 window.open('messages.php?nomenu=1&go=SMS_bot&pid=' + encodeURIComponent(pid) + '&m=' + encodeURIComponent(m), 'SMS_bot', 'width=370,height=600,resizable=0');

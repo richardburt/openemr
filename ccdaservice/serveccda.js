@@ -3,13 +3,13 @@
  * @link      http://www.open-emr.org
  *
  * @author    Jerry Padgett <sjpadgett@gmail.com>
- * @copyright Copyright (c) 2016-2022 Jerry Padgett <sjpadgett@gmail.com>
+ * @copyright Copyright (c) 2016-2024 Jerry Padgett <sjpadgett@gmail.com>
  * @license   https://github.com/openemr/openemr/blob/master/LICENSE GNU General Public License 3
  */
 
 "use strict";
 
-const enableDebug = true;
+const enableDebug = false;
 
 const net = require('net');
 const server = net.createServer();
@@ -2164,7 +2164,7 @@ function populateParticipant(participant) {
         "name": {
             "prefix": participant.prefix || "",
             "suffix": participant.suffix || "",
-            "middle": [participant.mname] || "",
+            "middle": [participant.mname ?? ""],
             "last": participant.lname || "",
             "first": participant.fname || ""
         },
@@ -2353,7 +2353,7 @@ function populateHeader(pd) {
             "name": {
                 "prefix": pd.information_recipient.prefix || "",
                 "suffix": pd.information_recipient.suffix || "",
-                "middle": [pd.information_recipient.mname] || "",
+                "middle": [pd.information_recipient.mname ?? ""],
                 "last": pd.information_recipient.lname || "",
                 "first": pd.information_recipient.fname || ""
             },
@@ -2449,13 +2449,13 @@ function getMeta(pd) {
         "identifiers": [
             {
                 "identifier": oidFacility || "NI",
-                "extension": "TT988"
+                "extension": "OE-DOC-0001"
             }
         ],
         "confidentiality": "Normal",
         "set_id": {
             "identifier": oidFacility || "NI",
-            "extension": "sTT988"
+            "extension": "sOE-DOC-0001"
         }
     }
     return meta;

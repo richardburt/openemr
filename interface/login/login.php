@@ -34,6 +34,9 @@ use OpenEMR\Events\Core\TemplatePageEvent;
 use OpenEMR\Services\FacilityService;
 use OpenEMR\Services\LogoService;
 use Symfony\Component\EventDispatcher\EventDispatcher;
+use Twig\Error\LoaderError;
+use Twig\Error\RuntimeError;
+use Twig\Error\SyntaxError;
 
 $ignoreAuth = true;
 // Set $sessionAllowWrite to true to prevent session concurrency issues during authorization related code
@@ -186,19 +189,6 @@ if ($t1 && !$t2) {
     $displaySmallLogo = 3;
 }
 
-$regTranslations = json_encode(array(
-    'title' => xla('OpenEMR Product Registration'),
-    'pleaseProvideValidEmail' => xla('Please provide a valid email address'),
-    'success' => xla('Success'),
-    'registeredSuccess' => xla('Your installation of OpenEMR has been registered'),
-    'submit' => xla('Submit'),
-    'noThanks' => xla('No Thanks'),
-    'registeredEmail' => xla('Registered email'),
-    'registeredId' => xla('Registered id'),
-    'genericError' => xla('Error. Try again later'),
-    'closeTooltip' => ''
-));
-
 $cookie = '';
 if (session_name()) {
     $sid = urlencode(session_id());
@@ -216,6 +206,10 @@ if (session_name()) {
     }
 
     $cookie = json_encode($cookie);
+}
+
+if ($_GET['testing_mode'] ?? 0 == 1) {
+    $_SESSION['testing_mode'] = 1;
 }
 
 $viewArgs = [
@@ -240,7 +234,6 @@ $viewArgs = [
     'displayAck' => $GLOBALS['display_acknowledgements_on_login'],
     'hasSession' => (bool)session_name(),
     'cookieText' => $cookie,
-    'regTranslations' => $regTranslations,
     'regConstants' => json_encode(['webroot' => $GLOBALS['webroot']]),
     'siteID' => $_SESSION['site_id'],
     'showLabels' => $GLOBALS['show_labels_on_login_form'],
@@ -262,4 +255,8 @@ $ed = $GLOBALS['kernel']->getEventDispatcher();
 $templatePageEvent = new TemplatePageEvent('login/login.php', [], $layout, $viewArgs);
 $event = $ed->dispatch($templatePageEvent, TemplatePageEvent::RENDER_EVENT);
 
-echo $t->render($event->getTwigTemplate(), $event->getTwigVariables());
+try {
+    echo $t->render($event->getTwigTemplate(), $event->getTwigVariables());
+} catch (LoaderError | RuntimeError | SyntaxError $e) {
+    echo "<p style='font-size:24px; color: red;'>" . text($e->getMessage()) . '</p>';
+}

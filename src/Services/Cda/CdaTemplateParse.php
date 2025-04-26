@@ -6,7 +6,7 @@
  * @package   OpenEMR
  * @link      https://www.open-emr.org
  * @author    Jerry Padgett <sjpadgett@gmail.com>
- * @copyright Copyright (c) 2021 Jerry Padgett <sjpadgett@gmail.com>
+ * @copyright Copyright (c) 2021-2025 Jerry Padgett <sjpadgett@gmail.com>
  * @license   https://github.com/openemr/openemr/blob/master/LICENSE GNU General Public License 3
  */
 
@@ -23,15 +23,17 @@ class CdaTemplateParse
     private $codeService;
     private $currentOid;
     protected $is_qrda_import;
+    public $conditionedXmlContent;
 
     /**
      * @var \Symfony\Contracts\EventDispatcher\EventDispatcherInterface
      */
     private $ed;
 
-    public function __construct()
+    public function __construct($conditionedXmlContent = "")
     {
         $this->templateData = [];
+        $this->conditionedXmlContent = $conditionedXmlContent;
         $this->is_qrda_import = false;
         $this->codeService = new CodeTypesService();
         $this->ed = $GLOBALS['kernel']->getEventDispatcher();
@@ -39,7 +41,6 @@ class CdaTemplateParse
 
     public function parseCDAEntryComponents($components): array
     {
-
         $components_oids = array(
             '2.16.840.1.113883.10.20.22.4.7' => 'allergy',
             '2.16.840.1.113883.10.20.22.2.6.1' => 'allergy',
@@ -66,7 +67,8 @@ class CdaTemplateParse
             '2.16.840.1.113883.10.20.22.2.56' => 'functionalCognitiveStatus',
             '1.3.6.1.4.1.19376.1.5.3.1.3.1' => 'referral',
             '2.16.840.1.113883.10.20.22.2.11.1' => 'dischargeMedications',
-            '2.16.840.1.113883.10.20.22.2.41' => 'dischargeSummary'
+            '2.16.840.1.113883.10.20.22.2.41' => 'dischargeSummary',
+            '2.16.840.1.113883.10.20.22.2.65' => 'clinicalNotes',
         );
 
         $preParseEvent = new CDAPreParseEvent($components);
@@ -97,7 +99,10 @@ class CdaTemplateParse
                     }
                 }
             }
-            $this->templateData = $postParseEvent->getTemplateData();
+
+            if (!empty($postParseEvent) && $postParseEvent instanceof CDAPostParseEvent) {
+                $this->templateData = $postParseEvent->getTemplateData();
+            }
         }
         return $this->templateData;
     }
@@ -364,20 +369,40 @@ class CdaTemplateParse
         if ($this->is_qrda_import) {
             $entry = $entry['act']['entryRelationship'];
         }
+        $parser = new CdaTextParser($this->conditionedXmlContent, "Imported Encounter Notes.");
+        $note = $parser->parseSectionByCode("46240-8");
+        if (!empty($note)) {
+            $note_text = $parser->generateConsolidatedTextNote($note);
+        } else {
+            $note_text = '';
+        }
+
+        // TODO: ensure all entryRelationships are handled. These describe the various actions or codes.
         if (!empty($entry['encounter']['effectiveTime']['value']) || !empty($entry['encounter']['effectiveTime']['low']['value'])) {
             $i = 1;
             if (!empty($this->templateData['field_name_value_array']['encounter'])) {
                 $i += count($this->templateData['field_name_value_array']['encounter']);
             }
 
-            $this->templateData['field_name_value_array']['encounter'][$i]['extension'] = $entry['encounter']['id']['extension'];
-            $this->templateData['field_name_value_array']['encounter'][$i]['root'] = $entry['encounter']['id']['root'];
+            $this->templateData['field_name_value_array']['encounter'][$i]['extension'] = $entry['encounter']['id']['extension'] ?? '';
+            $this->templateData['field_name_value_array']['encounter'][$i]['root'] = $entry['encounter']['id']['root'] ?? '';
             $this->templateData['field_name_value_array']['encounter'][$i]['date'] = ($entry['encounter']['effectiveTime']['value'] ?? null) ?: $entry['encounter']['effectiveTime']['low']['value'] ?? null;
             $this->templateData['field_name_value_array']['encounter'][$i]['date_end'] = $entry['encounter']['effectiveTime']['high']['value'] ?? null;
 
-            $code_type = $entry['encounter']['code']['codeSystemName'] ?: $entry['encounter']['code']['codeSystem'] ?? '';
+            $code_type = $entry['encounter']['code']['codeSystemName'] ?? '' ?: $entry['encounter']['code']['codeSystem'] ?? '';
             $code_text = $entry['encounter']['code']['displayName'] ?? '';
             $code = $this->codeService->resolveCode($entry['encounter']['code']['code'], $code_type, $code_text);
+            if (empty($code['code'])) {
+                $code['codeSystemName'] = $entry['encounter']['code']['translation']['codeSystemName'] ?? '';
+                $code['code'] = $entry['encounter']['code']['translation']['code'] ?? '';
+                $code['formatted_code'] = $code['codeSystemName'] . ':' . $entry['encounter']['code']['translation']['code'];
+                $code['code_text'] = $entry['encounter']['code']['translation']['displayName'] ?? '';
+            } elseif (empty($code['code'])) {
+                $code['code_text'] = xlt("Encounter code was not provided. Encounter reason is unknown.");
+            }
+            if ($code == '99211') {
+                $code['code_text'] = 'Office or other outpatient visit for evaluation.';
+            }
             $this->templateData['field_name_value_array']['encounter'][$i]['code'] = $code['formatted_code'];
             $this->templateData['field_name_value_array']['encounter'][$i]['code_text'] = $code['code_text'];
 
@@ -438,6 +463,7 @@ class CdaTemplateParse
                 }
             }
             $this->templateData['field_name_value_array']['encounter'][$i]['encounter_discharge_code'] = $option ?? '';
+            $this->templateData['field_name_value_array']['encounter'][$i]['reason'] = $note_text;
 
             $this->templateData['entry_identification_array']['encounter'][$i] = $i;
         }
@@ -448,7 +474,7 @@ class CdaTemplateParse
      */
     public function fetchMedicalProblemData($entry): void
     {
-        if (!empty($entry['act']['entryRelationship']['observation']['value']['code'])) {
+        if (!empty($entry['act']['entryRelationship']['observation']['value']['code']) || !empty($entry['act']['entryRelationship']['observation']['value']['codeSystem'])) {
             $i = 1;
             if (!empty($this->templateData['field_name_value_array']['lists1'])) {
                 $i += count($this->templateData['field_name_value_array']['lists1']);
@@ -458,11 +484,20 @@ class CdaTemplateParse
                 $classification = 'concern';
             }
             $this->templateData['field_name_value_array']['lists1'][$i]['subtype'] = $classification;
-            $code = $this->codeService->resolveCode(
-                $entry['act']['entryRelationship']['observation']['value']['code'],
-                ($entry['act']['entryRelationship']['observation']['value']['codeSystemName'] ?? '') ?: $entry['act']['entryRelationship']['observation']['value']['codeSystem'] ?? '',
-                $entry['act']['entryRelationship']['observation']['value']['displayName']
-            );
+
+            if (!empty($entry['act']['entryRelationship']['observation']['value']['code'])) {
+                $code = $this->codeService->resolveCode(
+                    $entry['act']['entryRelationship']['observation']['value']['code'],
+                    ($entry['act']['entryRelationship']['observation']['value']['codeSystemName'] ?? '') ?: $entry['act']['entryRelationship']['observation']['value']['codeSystem'] ?? '',
+                    $entry['act']['entryRelationship']['observation']['value']['displayName']
+                );
+            } elseif (!empty($entry['act']['entryRelationship']['observation']['value']['translation']['code'])) {
+                $code = $this->codeService->resolveCode(
+                    $entry['act']['entryRelationship']['observation']['value']['translation']['code'],
+                    ($entry['act']['entryRelationship']['observation']['value']['translation']['codeSystemName'] ?? '') ?: $entry['act']['entryRelationship']['observation']['value']['translation']['codeSystem'] ?? '',
+                    $entry['act']['entryRelationship']['observation']['value']['translation']['displayName']
+                );
+            }
             $this->templateData['field_name_value_array']['lists1'][$i]['list_code'] = $code['formatted_code'] ?: $entry['act']['entryRelationship']['observation']['value']['code'] ?? '';
             $this->templateData['field_name_value_array']['lists1'][$i]['list_code_text'] = $code['code_text'] ?: $entry['act']['entryRelationship']['observation']['value']['displayName'] ?? '';
 
@@ -484,26 +519,29 @@ class CdaTemplateParse
      */
     public function fetchAllergyIntoleranceObservation($entry)
     {
-        if (!empty($entry['act']['entryRelationship']['observation']['participant']['participantRole']['playingEntity']['code']['code'])) {
+        $isNull = !empty($entry['act']['entryRelationship']['observation']['participant']['participantRole']['playingEntity']['code']['nullFlavor']);
+        if (
+            !empty($entry['act']['entryRelationship']['observation']['participant']['participantRole']['playingEntity']['code']['code'])
+            || ($isNull && $entry['act']['effectiveTime']['low']['value'])
+        ) {
             $i = 1;
             // if there are already items here we want to add to them.
             if (!empty($this->templateData['field_name_value_array']['lists2'])) {
                 $i += count($this->templateData['field_name_value_array']['lists2']);
             }
-
             $this->templateData['field_name_value_array']['lists2'][$i]['type'] = 'allergy';
-            $this->templateData['field_name_value_array']['lists2'][$i]['extension'] = $entry['act']['id']['extension'];
+            $this->templateData['field_name_value_array']['lists2'][$i]['extension'] = $entry['act']['id']['extension'] ?? '';
             $this->templateData['field_name_value_array']['lists2'][$i]['begdate'] = $entry['act']['effectiveTime']['low']['value'] ?? null;
             $this->templateData['field_name_value_array']['lists2'][$i]['enddate'] = $entry['act']['effectiveTime']['high']['value'] ?? null;
             $this->templateData['field_name_value_array']['lists2'][$i]['list_code'] = $entry['act']['entryRelationship']['observation']['participant']['participantRole']['playingEntity']['code']['code'] ?? '';
             $this->templateData['field_name_value_array']['lists2'][$i]['list_code_text'] = $entry['act']['entryRelationship']['observation']['participant']['participantRole']['playingEntity']['code']['displayName'];
-            $this->templateData['field_name_value_array']['lists2'][$i]['codeSystemName'] = $entry['act']['entryRelationship']['observation']['participant']['participantRole']['playingEntity']['code']['codeSystemName'];
+            $this->templateData['field_name_value_array']['lists2'][$i]['codeSystemName'] = $entry['act']['entryRelationship']['observation']['participant']['participantRole']['playingEntity']['code']['codeSystemName'] ?? '';
             $this->templateData['field_name_value_array']['lists2'][$i]['outcome'] = $entry['act']['entryRelationship']['observation']['entryRelationship'][1]['observation']['value']['code'] ?? '';
             $this->templateData['field_name_value_array']['lists2'][$i]['severity_al_code'] = $entry['act']['entryRelationship']['observation']['entryRelationship'][2]['observation']['value']['code'] ?? '';
             $this->templateData['field_name_value_array']['lists2'][$i]['severity_al'] = $entry['act']['entryRelationship']['observation']['entryRelationship'][2]['observation']['value']['code'] ?? '';
-            $this->templateData['field_name_value_array']['lists2'][$i]['status'] = $entry['act']['entryRelationship']['observation']['entryRelationship'][0]['observation']['value']['displayName'];
+            $this->templateData['field_name_value_array']['lists2'][$i]['status'] = $entry['act']['entryRelationship']['observation']['entryRelationship'][0]['observation']['value']['displayName'] ?? '';
             $this->templateData['field_name_value_array']['lists2'][$i]['reaction'] = $entry['act']['entryRelationship']['observation']['entryRelationship'][1]['observation']['value']['code'] ?? '';
-            $this->templateData['field_name_value_array']['lists2'][$i]['reaction_text'] = $entry['act']['entryRelationship']['observation']['entryRelationship'][1]['observation']['value']['displayName'];
+            $this->templateData['field_name_value_array']['lists2'][$i]['reaction_text'] = $entry['act']['entryRelationship']['observation']['entryRelationship'][1]['observation']['value']['displayName'] ?? '';
             $this->templateData['field_name_value_array']['lists2'][$i]['modified_time'] = $entry['act']['entryRelationship']['observation']['performer']['assignedEntity']['time']['value'] ?? null;
             $this->templateData['entry_identification_array']['lists2'][$i] = $i;
         } elseif (!empty($entry['observation']['participant']['participantRole']['playingEntity']['code']['code'])) {
@@ -576,6 +614,7 @@ class CdaTemplateParse
             $this->templateData['field_name_value_array']['lists3'][$i]['request_type'] = $request_type;
             $this->templateData['field_name_value_array']['lists3'][$i]['extension'] = $entry['substanceAdministration']['id']['extension'] ?? null;
             $this->templateData['field_name_value_array']['lists3'][$i]['root'] = $entry['substanceAdministration']['id']['root'] ?? null;
+            $this->templateData['field_name_value_array']['lists3'][$i]['completion_status'] = $entry['substanceAdministration']['statusCode']['code'] ?? null;
 
             $this->templateData['field_name_value_array']['lists3'][$i]['begdate'] = date('Y-m-d');
             if (!empty($entry['substanceAdministration']['effectiveTime'][0]['low']['value'])) {
@@ -588,7 +627,8 @@ class CdaTemplateParse
 
             $this->templateData['field_name_value_array']['lists3'][$i]['route'] = $entry['substanceAdministration']['routeCode']['code'] ?? null;
             $this->templateData['field_name_value_array']['lists3'][$i]['route_display'] = $entry['substanceAdministration']['routeCode']['displayName'] ?? null;
-            $this->templateData['field_name_value_array']['lists3'][$i]['dose'] = $entry['substanceAdministration']['doseQuantity']['value'] ?? null;
+            $this->templateData['field_name_value_array']['lists3'][$i]['dose'] = number_format((float)$entry['substanceAdministration']['doseQuantity']['value'], 2, '.', '') ?? null;
+
             $this->templateData['field_name_value_array']['lists3'][$i]['dose_unit'] = $entry['substanceAdministration']['doseQuantity']['unit'] ?? null;
             $this->templateData['field_name_value_array']['lists3'][$i]['rate'] = $entry['substanceAdministration']['rateQuantity']['value'] ?? null;
             $this->templateData['field_name_value_array']['lists3'][$i]['rate_unit'] = $entry['substanceAdministration']['rateQuantity']['unit'] ?? null;
@@ -608,6 +648,7 @@ class CdaTemplateParse
             $this->templateData['field_name_value_array']['lists3'][$i]['provider_state'] = $entry['substanceAdministration']['performer']['assignedEntity']['addr']['state'] ?? ($entry['substanceAdministration']['entryRelationship'][1]['supply']['performer']['assignedEntity']['addr']['state'] ?? null);
             $this->templateData['field_name_value_array']['lists3'][$i]['provider_postalCode'] = $entry['substanceAdministration']['performer']['assignedEntity']['addr']['postalCode'] ?? ($entry['substanceAdministration']['entryRelationship'][1]['supply']['performer']['assignedEntity']['addr']['postalCode'] ?? null);
             $this->templateData['field_name_value_array']['lists3'][$i]['provider_country'] = $entry['substanceAdministration']['performer']['assignedEntity']['addr']['country']['value'] ?? ($entry['substanceAdministration']['entryRelationship'][1]['supply']['performer']['assignedEntity']['addr']['country'] ?? null);
+
             $this->templateData['entry_identification_array']['lists3'][$i] = $i;
         }
     }
@@ -664,7 +705,7 @@ class CdaTemplateParse
             $this->templateData['field_name_value_array']['immunization'][$i]['represented_organization'] = $entry['substanceAdministration']['performer']['assignedEntity']['representedOrganization']['name'] ?? null;
             $this->templateData['field_name_value_array']['immunization'][$i]['represented_organization_tele'] = $entry['substanceAdministration']['performer']['assignedEntity']['representedOrganization']['telecom'] ?? null;
 
-            if ($entry['substanceAdministration']['entryRelationship']['observation']['value']['code']) {
+            if (($entry['substanceAdministration']['entryRelationship'] ?? '') && ($entry['substanceAdministration']['entryRelationship']['observation']['value']['code'] ?? '')) {
                 $code = $this->codeService->resolveCode(
                     $entry['substanceAdministration']['entryRelationship']['observation']['value']['code'],
                     $entry['substanceAdministration']['entryRelationship']['observation']['value']['codeSystemName'] ?: $entry['substanceAdministration']['entryRelationship']['observation']['value']['codeSystem'] ?? '',
@@ -690,8 +731,8 @@ class CdaTemplateParse
     public function fetchProcedureActivityData($entry): void
     {
         if (
-            (!empty($entry['procedure']['code']['code']) || !empty($entry['procedure']['code']["nullFlavor"]))
-            && $entry['procedure']['code']["nullFlavor"] != 'NI'
+            (!empty($entry['procedure']['code']['code']) || !empty($entry['procedure']['code']["nullFlavor"] ?? ''))
+            && ($entry['procedure']['code']["nullFlavor"] ?? '') != 'NI'
         ) {
             $i = 1;
             if (!empty($this->templateData['field_name_value_array']['procedure'])) {
@@ -729,12 +770,12 @@ class CdaTemplateParse
             }
 
             // check for a reason code if observation.
-            if (is_array($entry['procedure']['entryRelationship'])) {
+            if (is_array($entry['procedure']['entryRelationship'] ?? '')) {
                 $entryRelationship = $entry['procedure']['entryRelationship'][1];
             } else {
-                $entryRelationship = $entry['procedure']['entryRelationship'];
+                $entryRelationship = $entry['procedure']['entryRelationship'] ?? '';
             }
-            if ($entryRelationship['observation']['value']['code']) {
+            if ($entryRelationship['observation']['value']['code'] ?? '') {
                 $code = $this->codeService->resolveCode(
                     $entryRelationship['observation']['value']['code'],
                     $entryRelationship['observation']['value']['codeSystemName'] ?: $entryRelationship['observation']['value']['codeSystem'] ?? '',
@@ -926,7 +967,7 @@ class CdaTemplateParse
                 $this->fetchImmunizationData($value);
             }
         } else {
-            $this->fetchImmunizationData($component['section']['entry']);
+            $this->fetchImmunizationData($component['section']['entry'] ?? '');
         }
     }
 
@@ -998,8 +1039,13 @@ class CdaTemplateParse
                     $this->templateData['field_name_value_array']['procedure_result'][$i]['results_extension'] = $value['observation']['id']['extension'] ?? null;
                     $this->templateData['field_name_value_array']['procedure_result'][$i]['results_root'] = $value['observation']['id']['root'] ?? null;
                     // @TODO code lookup here
-                    $this->templateData['field_name_value_array']['procedure_result'][$i]['results_code'] = $value['observation']['code']['code'] ?? null;
-                    $this->templateData['field_name_value_array']['procedure_result'][$i]['results_text'] = $value['observation']['code']['displayName'] ?? null;
+                    $code = $this->codeService->resolveCode(
+                        $value['observation']['code']['code'],
+                        $value['observation']['code']['codeSystemName'] ?? 'LOINC',
+                        $value['observation']['code']['displayName'] ?? ''
+                    );
+                    $this->templateData['field_name_value_array']['procedure_result'][$i]['results_code'] = $code['code'] ?? null;
+                    $this->templateData['field_name_value_array']['procedure_result'][$i]['results_text'] = $code['code_text'] ?? null;
                     $this->templateData['field_name_value_array']['procedure_result'][$i]['results_date'] = $value['observation']['effectiveTime']['value'] ?? null;
                     if ($value['observation']['value']['type'] == 'ST') {
                         $this->templateData['field_name_value_array']['procedure_result'][$i]['results_value'] = $value['observation']['value']['_'] ?? null;
@@ -1242,7 +1288,7 @@ class CdaTemplateParse
                 '2.16.840.1.113883.10.20.22.4.78' => 'smoking'
             );
             $i = 0;
-            $code = $social_history_data['observation']['templateId']['root'];
+            $code = $social_history_data['observation']['templateId']['root'] ?? '';
             if (!empty($this->templateData['field_name_value_array']['social_history'])) {
                 foreach ($this->templateData['field_name_value_array']['social_history'] as $key => $value) {
                     if (!array_key_exists($social_history_array[$code], $value)) {
@@ -1253,12 +1299,15 @@ class CdaTemplateParse
                 }
             }
 
-            $this->templateData['field_name_value_array']['social_history'][$i][$social_history_array[$code]]['extension'] = $social_history_data['observation']['id']['extension'];
-            $this->templateData['field_name_value_array']['social_history'][$i][$social_history_array[$code]]['root'] = $social_history_data['observation']['id']['root'];
-            $this->templateData['field_name_value_array']['social_history'][$i][$social_history_array[$code]]['status'] = $social_history_data['observation']['value']['code'];
-            $this->templateData['field_name_value_array']['social_history'][$i][$social_history_array[$code]]['begdate'] = $social_history_data['observation']['effectiveTime']['low']['value'];
-            $this->templateData['field_name_value_array']['social_history'][$i][$social_history_array[$code]]['enddate'] = $social_history_data['observation']['effectiveTime']['high']['value'];
-            $this->templateData['field_name_value_array']['social_history'][$i][$social_history_array[$code]]['value'] = $social_history_data['observation']['value']['displayName'];
+            if (!empty($this->templateData['field_name_value_array']['social_history'])) {
+                $this->templateData['field_name_value_array']['social_history'][$i][$social_history_array[$code]]['extension'] = $social_history_data['observation']['id']['extension'];
+                $this->templateData['field_name_value_array']['social_history'][$i][$social_history_array[$code]]['root'] = $social_history_data['observation']['id']['root'];
+                $this->templateData['field_name_value_array']['social_history'][$i][$social_history_array[$code]]['status'] = $social_history_data['observation']['value']['code'];
+                $this->templateData['field_name_value_array']['social_history'][$i][$social_history_array[$code]]['begdate'] = $social_history_data['observation']['effectiveTime']['low']['value'];
+                $this->templateData['field_name_value_array']['social_history'][$i][$social_history_array[$code]]['enddate'] = $social_history_data['observation']['effectiveTime']['high']['value'];
+                $this->templateData['field_name_value_array']['social_history'][$i][$social_history_array[$code]]['value'] = $social_history_data['observation']['value']['displayName'];
+            }
+
             $this->templateData['entry_identification_array']['social_history'][$i] = $i;
         }
     }
@@ -1266,7 +1315,7 @@ class CdaTemplateParse
     public function encounter($component)
     {
         $component['section']['text'] = '';
-        if ($component['section']['entry'][0]) {
+        if (($component['section']['entry'][0] ?? '')) {
             foreach ($component['section']['entry'] as $key => $value) {
                 $this->fetchEncounterPerformed($value);
             }
@@ -1280,16 +1329,52 @@ class CdaTemplateParse
 
     public function carePlan($component)
     {
-        if ($this->currentOid != '2.16.840.1.113883.10.20.22.2.58') {
+        if ($this->currentOid != '2.16.840.1.113883.10.20.22.2.58' && $this->currentOid != "2.16.840.1.113883.10.20.22.2.10") {
             $component['section']['text'] = null;
         }
         if (!empty($component['section']['entry'][0])) {
             foreach ($component['section']['entry'] as $key => $value) {
                 $this->fetchCarePlanData($value, $component['section']['text']);
             }
+        } elseif (empty($component['section']['entry']) && !empty($component['section']['text'])) {
+            $this->fetchCarePlanNote($component['section']);
         } else {
             $this->fetchCarePlanData($component['section']['entry'] ?? null, $component['section']['text']);
         }
+    }
+
+    public function fetchCarePlanNote($section): void
+    {
+        $plan_type = 'plan_of_care';
+        // Care Plan Note
+        if ($section['code']['code'] == '18776-5') {
+            $parser = new CdaTextParser($this->conditionedXmlContent);
+            $note = $parser->parseSectionByCode("18776-5");
+            if (empty($note)) {
+                return;
+            }
+            $note_text = $parser->generateConsolidatedTextNote($note);
+        } else {
+            return;
+        }
+
+        $i = 1;
+        if (!empty($this->templateData['field_name_value_array']['care_plan_notes'])) {
+            $i += count($this->templateData['field_name_value_array']['care_plan_notes']);
+        }
+
+        $code = $this->codeService->resolveCode(
+            $section['code']['code'] ?? '',
+            $section['code']['codeSystemName'] ?? null,
+            $section['code']['displayName'] ?? ''
+        );
+        $this->templateData['field_name_value_array']['care_plan'][$i]['plan_type'] = $plan_type;
+        $this->templateData['field_name_value_array']['care_plan'][$i]['date'] = date("Y-m-d");
+        $this->templateData['field_name_value_array']['care_plan'][$i]['code'] = $code['formatted_code'];
+        $this->templateData['field_name_value_array']['care_plan'][$i]['code_text'] = $code['code_text'];
+        $this->templateData['field_name_value_array']['care_plan'][$i]['description'] = $note_text;
+
+        $this->templateData['entry_identification_array']['care_plan'][$i] = $i;
     }
 
     public function fetchCarePlanData($entry, $section_text = '')
@@ -1513,19 +1598,77 @@ class CdaTemplateParse
         }
     }
 
+    public function clinicalNotes($component)
+    {
+        // section level parse. All entries will belong to the same encounter
+        $type_code = $component['section']["code"]["code"];
+        $this->fetchClinicalNoteData($component, $type_code);
+    }
+
+    public function fetchClinicalNoteData($entry, $note_type_code): void
+    {
+        $parser = new ClinicalNoteParser();
+        $progressNotes = $parser->parseClinicalNotesByCode($this->conditionedXmlContent, $note_type_code);
+
+        $i = 1;
+        if (!empty($this->templateData['field_name_value_array']['clinical_notes'])) {
+            $i += count($this->templateData['field_name_value_array']['clinical_notes']);
+        }
+
+        if (isset($progressNotes['clinical_notes']) && is_array($progressNotes['clinical_notes'])) {
+            foreach ($progressNotes['clinical_notes'] as $key => $note) {
+                $this->templateData['field_name_value_array']['clinical_notes'][$i]['encounter_root'] = $note['encounter_root'] ?? '';
+                $this->templateData['field_name_value_array']['clinical_notes'][$i]['encounter_extension'] = $note['encounter_extension'] ?? ''; // reference to the encounter
+                $this->templateData['field_name_value_array']['clinical_notes'][$i]['plan_type'] = $note['plan_type'] ?? '';
+                $this->templateData['field_name_value_array']['clinical_notes'][$i]['date'] = $note['effective_time'] ?? '';
+                $this->templateData['field_name_value_array']['clinical_notes'][$i]['code'] = ($note['plan_code_system_name'] ?? 'LOINC') . ':' . $note['plan_code'] ?? '';
+                $this->templateData['field_name_value_array']['clinical_notes'][$i]['code_text'] = $note['plan_display_name'] ?? $progressNotes['section_metadata']['displayName'] ?? '';
+                $this->templateData['field_name_value_array']['clinical_notes'][$i]['code_system'] = $note['plan_code_system_name'] ?? $progressNotes['section_metadata']['codeSystemName'] ?? '';
+                if (isset($note['author_details'])) {
+                    $author = $note['author_details'];
+                    $this->templateData['field_name_value_array']['clinical_notes'][$i]['author_name'] = $author['name'] ?? '';
+                    if (isset($author['wp_address'])) {
+                        $this->templateData['field_name_value_array']['clinical_notes'][$i]['author_address_street'] = $note['author_details']['wp_address']['street'] ?? '';
+                        $this->templateData['field_name_value_array']['clinical_notes'][$i]['author_address_city'] = $note['author_details']['wp_address']['city'] ?? '';
+                        $this->templateData['field_name_value_array']['clinical_notes'][$i]['author_address_state'] = $note['author_details']['wp_address']['state'] ?? '';
+                        $this->templateData['field_name_value_array']['clinical_notes'][$i]['author_address_postal_code'] = $note['author_details']['wp_address']['postalCode'] ?? '';
+                        $this->templateData['field_name_value_array']['clinical_notes'][$i]['author_address_country'] = $note['author_details']['wp_address']['country'] ?? '';
+                        // Populate concatenated address
+                        $this->templateData['field_name_value_array']['clinical_notes'][$i]['author_address'] = implode(', ', array_filter([
+                            $note['author_details']['wp_address']['street'] ?? '',
+                            $note['author_details']['wp_address']['city'] ?? '',
+                            $note['author_details']['wp_address']['state'] ?? '',
+                            $note['author_details']['wp_address']['postalCode'] ?? '',
+                            $note['author_details']['wp_address']['country'] ?? '',
+                        ]));
+                    }
+                    $this->templateData['field_name_value_array']['clinical_notes'][$i]['author_phone'] = $author['wp_phone'] ?? '';
+                    $addAuthor = "AUTHOR: {$author['name']} {$this->templateData['field_name_value_array']['clinical_notes'][$i]['author_address']}\nPHONE: {$author['wp_phone']}\n\n";
+                    $this->templateData['field_name_value_array']['clinical_notes'][$i]['description'] = $addAuthor . $note['content'] ?? '';
+                }
+                // track the entry id
+                $this->templateData['entry_identification_array']['clinical_notes'][$i] = $i;
+                $i++;
+            }
+            $status = 'done';
+        }
+    }
+
     public function functionalCognitiveStatus($component)
     {
         if ($this->currentOid != '2.16.840.1.113883.10.20.22.2.56') {
             $component['section']['text'] = '';
         }
         $ccnt = 0;
-        if ($component['section']['entry'][0]) {
+        if ($component['section']['entry'][0] ?? '') {
             foreach ($component['section']['entry'] as $key => $value) {
-                $this->fetchFunctionalCognitiveStatusData($value, $component['section']['text'][$ccnt]);
+                if (!empty($component['section']['text'][$ccnt])) {
+                    $this->fetchFunctionalCognitiveStatusData($value, $component['section']['text'][$ccnt]);
+                }
                 $ccnt++;
             }
         } else {
-            $this->fetchFunctionalCognitiveStatusData($component['section']['entry'], $component['section']['text']);
+            $this->fetchFunctionalCognitiveStatusData($component['section']['entry'] ?? '', $component['section']['text']);
         }
     }
 
@@ -1589,7 +1732,7 @@ class CdaTemplateParse
 
     public function referral($component)
     {
-        if ($component['section']['entry'][0]) {
+        if ($component['section']['entry'][0] ?? '') {
             foreach ($component['section']['entry'] as $key => $value) {
                 $this->fetchReferralData($value);
             }
@@ -1614,7 +1757,7 @@ class CdaTemplateParse
             if (!empty($this->templateData['field_name_value_array']['referral'])) {
                 $i += count($this->templateData['field_name_value_array']['referral']);
             }
-            $this->templateData['field_name_value_array']['referral'][$i]['root'] = $referral_data['templateId']['root'];
+            $this->templateData['field_name_value_array']['referral'][$i]['root'] = $referral_data['templateId']['root'] ?? '';
             $this->templateData['field_name_value_array']['referral'][$i]['body'] = (!empty($referral_data['text']['paragraph'])) ? preg_replace('/\s+/', ' ', $referral_data['text']['paragraph']) : '';
 
             $this->templateData['entry_identification_array']['referral'][$i] = $i;

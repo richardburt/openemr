@@ -40,6 +40,7 @@ use OpenEMR\Services\FacilityService;
 use OpenEMR\Core\Header;
 
 $form_name = "eye_mag";
+global $form_folder;
 $form_folder = "eye_mag";
 
 $facilityService = new FacilityService();
@@ -453,6 +454,7 @@ function narrative($pid, $encounter, $cols, $form_id, $choice = 'full')
                 <?php
                     //get patient photo
                     $tempDocC = new C_Document();
+                    $tempDocC->onReturnRetrieveKey();
                     $fileTemp = $tempDocC->retrieve_action($pid, -1, false, true, true, true, 'patient_picture');
                 if (!empty($fileTemp)) {
                     if ($PDF_OUTPUT) {
@@ -691,6 +693,7 @@ function narrative($pid, $encounter, $cols, $form_id, $choice = 'full')
                 <?php
                     // if the VF zone is checked, display it
                     // if ODVF1 = 1 (true boolean) the value="0" checked="true"
+                $bad = 0;
                 for ($z = 1; $z < 5; $z++) {
                     $ODzone = "ODVF" . $z;
                     if ($$ODzone == '1') {
@@ -2478,6 +2481,7 @@ function display_draw_image($zone, $encounter, $pid)
         //               if ($extension == ".png" || $extension == ".jpg" || $extension == ".jpeg" || $extension == ".gif") {
         if ($PDF_OUTPUT) {
             $tempDocC = new C_Document();
+            $tempDocC->onReturnRetrieveKey();
             $fileTemp = $tempDocC->retrieve_action($pid, $doc['id'], false, true, true);
             // tmp file in ../documents/temp since need to be available via webroot
             $from_file_tmp_web_name = tempnam($GLOBALS['OE_SITE_DIR'] . '/documents/temp', "oer");

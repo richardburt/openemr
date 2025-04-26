@@ -26,6 +26,7 @@ class CcdaServiceRequestModelGenerator
 {
     private $data;
     private $createdtime;
+    private $exportwithDocuments;
 
     /**
      * @var EncounterccdadispatchTable
@@ -76,7 +77,7 @@ class CcdaServiceRequestModelGenerator
                     $end = date('YmdHisO', $end);
                 }
             }
-        } else if ($document_type == 'ccd' || $document_type == 'toc') {
+        } elseif ($document_type == 'ccd' || $document_type == 'toc') {
             if (empty($end)) {
                 $end = date('YmdHisO'); // current date
             }
@@ -113,7 +114,7 @@ class CcdaServiceRequestModelGenerator
         ];
     }
 
-    public function create_data($pid, $encounter, $sections, $components, $recipients, $params, $document_type, $referral_reason, int $send = null, $date_options = [])
+    public function create_data($pid, $encounter, $sections, $components, $recipients, $params, $document_type, $referral_reason, ?int $send, $date_options = [])
     {
         global $assignedEntity;
         global $representedOrganization;

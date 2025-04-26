@@ -137,7 +137,7 @@ class ApplicationTable
      *         $audit['action_taken_time']="";
      *         $audit['checksum']="";
      */
-    public function portalAudit(string $type = null, string $rec = null, array $auditvals, $oelog = true, $error = true)
+    public function portalAudit(?string $type, ?string $rec, array $auditvals, $oelog = true, $error = true)
     {
         $return = false;
         $result = false;
@@ -198,8 +198,8 @@ class ApplicationTable
 
     public function portalLog($event = '', $patient_id = null, $comments = "", $binds = '', $success = '1', $user_notes = '', $ccda_doc_id = 0)
     {
-        $groupname = isset($GLOBALS['groupname']) ? $GLOBALS['groupname'] : 'none';
-        $user = isset($_SESSION['portal_username']) ? $_SESSION['portal_username'] : $_SESSION['authUser'] ?? null;
+        $groupname = $GLOBALS['groupname'] ?? 'none';
+        $user = $_SESSION['portal_username'] ?? $_SESSION['authUser'] ?? null;
         $log_from = isset($_SESSION['portal_username']) ? 'onsite-portal' : 'portal-dashboard';
         if (!isset($_SESSION['portal_username']) && !isset($_SESSION['authUser'])) {
             $log_from = 'portal-login';
