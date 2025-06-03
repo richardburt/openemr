@@ -35,9 +35,7 @@ if ($patientid < 0) {
     $patientid = (int) $pid; // -1 means current pid
 }
 // PDF header information
-$patientname = getPatientName($patientid);
-$patientdob = getPatientData($patientid, "DOB");
-$dateofservice = fetchDateService($encounter);
+
 
 $visitid = empty($_REQUEST['visitid']) ? 0 : (0 + $_REQUEST['visitid']);
 if ($visitid < 0) {
