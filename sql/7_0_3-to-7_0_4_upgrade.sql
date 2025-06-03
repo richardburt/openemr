@@ -136,7 +136,7 @@ CREATE TABLE `track_events` (
     `last_event`     DATETIME NULL,
     `label_count`    INT UNSIGNED NOT NULL DEFAULT 1,
     PRIMARY KEY (`id`),
-    UNIQUE KEY `unique_event_label` (`event_label`)
+    UNIQUE KEY `unique_event_label_target` (`event_label`, `event_url`(255), `event_target`(255))
 ) ENGINE = InnoDB COMMENT = 'Telemetry Event Data';
 #EndIf
 
@@ -158,4 +158,16 @@ ALTER TABLE `product_registration` ADD `last_ask_version` TINYTEXT;
 
 #IfMissingColumn product_registration options
 ALTER TABLE `product_registration` ADD `options` TEXT COMMENT 'JSON array of scope options';
+#EndIf
+
+#IfIndex track_events unique_event_label
+ALTER TABLE `track_events` DROP INDEX `unique_event_label`;
+#EndIf
+
+#IfIndex track_events unique_event_label_url
+ALTER TABLE `track_events` DROP INDEX `unique_event_label_url`;
+#EndIf
+
+#IfNotIndex track_events unique_event_label_target
+ALTER TABLE `track_events` ADD UNIQUE `unique_event_label_target` (`event_label`, `event_url`(255), `event_target`(255));
 #EndIf

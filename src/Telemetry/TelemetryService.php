@@ -11,6 +11,7 @@
 
 namespace OpenEMR\Telemetry;
 
+use OpenEMR\Common\Logging\SystemLogger;
 use OpenEMR\Common\Uuid\UniqueInstallationUuid;
 use OpenEMR\Services\VersionService;
 
@@ -21,32 +22,72 @@ class TelemetryService
 {
     protected TelemetryRepository $repository;
     protected VersionService $versionService;
+    protected SystemLogger $logger;
 
-    public function __construct(TelemetryRepository $repository, VersionService $versionService)
+
+    public function __construct(TelemetryRepository $repository = null, VersionService $versionService = null, SystemLogger $logger = null)
     {
+        if (!($versionService instanceof VersionService) || !($repository instanceof TelemetryRepository)) {
+            $repository = new TelemetryRepository();
+            $versionService = new VersionService();
+        }
         $this->repository = $repository;
         $this->versionService = $versionService;
+
+        if (!($logger instanceof SystemLogger)) {
+            $logger = new SystemLogger();
+        }
+        $this->logger = $logger;
+    }
+
+    /**
+     * Checks if telemetry is enabled based on the product registration table.
+     * I don't know why I didn't use telemetry_enabled in the product_registration table.
+     *
+     * @return int
+     */
+    public static function isTelemetryEnabled(): int
+    {
+        // Check if telemetry is disabled in the product registration table.
+        $isEnabled = sqlQuery("SELECT `telemetry_disabled` FROM `product_registration` WHERE `telemetry_disabled` = 0")['telemetry_disabled'] ?? null;
+        if (!is_null($isEnabled)) {
+            // If telemetry_disabled is 0, it means telemetry is enabled.
+            $isEnabled = 1;
+        } else {
+            // If telemetry_disabled is not 0, it means telemetry is disabled.
+            $isEnabled = 0;
+        }
+
+        return $isEnabled;
     }
 
     /**
      * Reports a click event after validating the required input.
+     * $event = [
+     *    'eventType' => $eventType,
+     *    'eventLabel' => $eventLabel,
+     *    'eventUrl' => $eventUrl,
+     *    'eventTarget' => $eventTarget,
+     * ]
      */
-    public function reportClickEvent(array $data): void
+    public function reportClickEvent(array $data, bool $normalizeUrl = false): false|string
     {
         $eventType = $data['eventType'] ?? '';
         $eventLabel = $data['eventLabel'] ?? '';
         // Sanitize URL by stripping query parameters.
         $eventUrl = preg_replace('/\?.*$/', '', $data['eventUrl'] ?? '');
+        // Normalize URL, if $normalizeUrl is true
+        if ($normalizeUrl) {
+            $eventUrl = $this->normalizeUrl($eventUrl);
+        }
         $eventTarget = $data['eventTarget'] ?? '';
         $currentTime = date("Y-m-d H:i:s");
 
         if (empty($eventType) || empty($eventLabel)) {
-            http_response_code(400);
-            echo json_encode(["error" => "Missing required fields"]);
-            exit;
+            return json_encode(["error" => "Missing required fields"]);
         }
 
-        $success = $this->repository->insertOrUpdateClickEvent(
+        $success = $this->repository->saveTelemetryEvent(
             [
                 'eventType' => $eventType,
                 'eventLabel' => $eventLabel,
@@ -57,10 +98,21 @@ class TelemetryService
         );
 
         if ($success) {
-            echo json_encode(["success" => true]);
+            $this->logger->debug("Telemetry Event has been saved", [
+                'eventType' => $eventType,
+                'eventLabel' => $eventLabel,
+                'eventUrl' => $eventUrl,
+                'eventTarget' => $eventTarget,
+            ]);
+            return json_encode(["success" => true]);
         } else {
-            http_response_code(500);
-            echo json_encode(["error" => "Database insertion/update failed"]);
+            $this->logger->error("Telemetry Event failed to save", [
+                'eventType' => $eventType,
+                'eventLabel' => $eventLabel,
+                'eventUrl' => $eventUrl,
+                'eventTarget' => $eventTarget,
+            ]);
+            return json_encode(["error" => "Database insertion/update failed"]);
         }
     }
 
@@ -69,6 +121,11 @@ class TelemetryService
      */
     public function reportUsageData(): int|bool
     {
+        if (empty(self::isTelemetryEnabled())) {
+            error_log("Telemetry is not enabled, so do not send a usage report.");
+            return false;
+        }
+
         $site_uuid = UniqueInstallationUuid::getUniqueInstallationUuid() ?? '';
         if (empty($site_uuid)) {
             error_log("Site UUID not found.");
@@ -144,5 +201,30 @@ class TelemetryService
         }
 
         return $httpStatus;
+    }
+
+    /**
+     * Sets the API event data.
+     *
+     * @param mixed $event_data The event data to set.
+     */
+    public function trackApiRequestEvent(array $event_data): void
+    {
+        if (!empty(self::isTelemetryEnabled())) {
+            $this->reportClickEvent($event_data);
+        }
+    }
+
+    private function normalizeUrl(string $url): string
+    {
+        $parsed = parse_url($url);
+        $path = $parsed['path'] ?? '';
+        $fragment = isset($parsed['fragment']) ? '#' . $parsed['fragment'] : '';
+        if (!empty($GLOBALS['webroot'])) {
+            $normalized = preg_replace('#^(' . $GLOBALS['webroot'] . ')?#', '', $path);
+        } else {
+            $normalized = $path;
+        }
+        return ($normalized . $fragment);
     }
 }

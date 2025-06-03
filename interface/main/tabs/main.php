@@ -30,24 +30,23 @@ use OpenEMR\Events\Main\Tabs\RenderEvent;
 use OpenEMR\Menu\MainMenuRole;
 use OpenEMR\Services\LogoService;
 use OpenEMR\Services\ProductRegistrationService;
+use OpenEMR\Telemetry\TelemetryService;
 use Symfony\Component\Filesystem\Path;
 
 $logoService = new LogoService();
 $menuLogo = $logoService->getLogo('core/menu/primary/');
 // Registration status and options.
 $productRegistration = new ProductRegistrationService();
-$product_row = $productRegistration->getProductStatus();
+$product_row = $productRegistration->getProductDialogStatus();
 $allowRegisterDialog = $product_row['allowRegisterDialog'] ?? 0;
-$allowTelemetry = $product_row['allowTelemetry'] ?? null;
-$allowEmail = $product_row['statusAsString'] == 'UNREGISTERED' ? 1 : 0;
-$registeredEmail = $product_row['email'] ?? null;
-$registerOptOut = $product_row['opt_out'] ?? null;
+$allowTelemetry = $product_row['allowTelemetry'] ?? null; // for dialog
+$allowEmail = $product_row['allowEmail'] ?? null; // for dialog
 // If running unit tests, then disable the registration dialog
 if ($_SESSION['testing_mode'] ?? false) {
     $allowRegisterDialog = false;
 }
 // If the user is not a super admin, then disable the registration dialog
-if (!AclMain::aclCheckCore('admin', 'super', '', 'write')) {
+if (!AclMain::aclCheckCore('admin', 'super')) {
     $allowRegisterDialog = false;
 }
 
@@ -123,8 +122,7 @@ $twig = (new TwigContainer(null, $GLOBALS['kernel']))->getTwig();
     const isSms = "<?php echo !empty($GLOBALS['oefax_enable_sms'] ?? null); ?>";
     const isFax = "<?php echo !empty($GLOBALS['oefax_enable_fax']) ?? null?>";
     const isServicesOther = (isSms || isFax);
-    const allowTelemetry = <?php echo js_escape($allowTelemetry); ?>;
-    const registerOptOut = <?php echo js_escape($registerOptOut); ?>;
+    var telemetryEnabled = <?php echo js_escape(TelemetryService::isTelemetryEnabled()); ?>;
 
     /**
      * Async function to get session value from the server
@@ -466,12 +464,10 @@ if (isset($_SESSION['app1'])) {
     <div class="mainFrames d-flex flex-row" id="mainFrames_div">
         <div id="framesDisplay" data-bind="template: {name: 'tabs-frames', data: application_data}"></div>
     </div>
-    <?php echo $twig->render("login/partials/html/product_registration_modal.html.twig", [
+    <?php echo $twig->render("product_registration/product_registration_modal.html.twig", [
         'webroot' => $webroot,
-        'email' => $email ?? '',
         'allowEmail' => $allowEmail ?? false,
-        'allowTelemetry' => $allowTelemetry ?? false,
-        'optOut' => $optOut ?? null]); ?>
+        'allowTelemetry' => $allowTelemetry ?? false]); ?>
 </div>
 <script>
     ko.applyBindings(app_view_model);
@@ -517,7 +513,7 @@ if (!empty($GLOBALS['kernel']->getEventDispatcher())) {
 
 if (!empty($allowRegisterDialog)) { // disable if running unit tests.
     // Include the product registration js, telemetry and usage data reporting dialog
-    echo $twig->render("login/partials/js/product_reg.js.twig", ['webroot' => $webroot]);
+    echo $twig->render("product_registration/product_reg.js.twig", ['webroot' => $webroot]);
 }
 
 ?>
